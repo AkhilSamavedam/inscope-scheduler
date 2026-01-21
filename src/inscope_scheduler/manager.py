@@ -6,10 +6,9 @@ import os
 from pathlib import Path
 from typing import List
 
-from filelock import FileLock, Timeout
-
+from .backends import Backend, LocalBackend, SlurmBackend
 from .lease import ResourceLease
-from .probe import GPUInfo, detect_gpus
+from .probe import GPUInfo
 
 
 class ResourceManager:
@@ -17,41 +16,56 @@ class ResourceManager:
         self,
         lock_dir: Path | None = None,
         env_var: str = "INSCOPE_LOCK_DIR",
+        backend: Backend | None = None,
     ) -> None:
+        if backend is not None:
+            self.backend = backend
+            self.lock_dir = getattr(backend, "lock_dir", Path("/tmp/inscope_scheduler/locks"))
+            return
+
         env_lock_dir = os.getenv(env_var) if env_var else None
         if lock_dir is None and env_lock_dir:
             lock_dir = Path(env_lock_dir)
         self.lock_dir = lock_dir or Path("/tmp/inscope_scheduler/locks")
         self.lock_dir.mkdir(parents=True, exist_ok=True)
 
+        if os.getenv("SLURM_JOB_ID"):
+            self.backend = SlurmBackend()
+        else:
+            self.backend = LocalBackend(lock_dir=self.lock_dir)
+
     def available_gpus(self) -> List[GPUInfo]:
-        return detect_gpus()
+        return self.backend.available_gpus()
 
-    def request_gpus(self, count: int = 1, timeout: float = 0.0) -> ResourceLease:
-        if count <= 0:
-            raise ValueError("count must be >= 1")
+    def request_gpus(
+        self,
+        count: int = 1,
+        timeout: float = 0.0,
+        ttl_seconds: float | None = None,
+        heartbeat_interval: float | None = 30.0,
+    ) -> ResourceLease:
+        return self.backend.request_gpus(
+            count=count,
+            timeout=timeout,
+            ttl_seconds=ttl_seconds,
+            heartbeat_interval=heartbeat_interval,
+        )
 
-        gpus = self.available_gpus()
-        if not gpus:
-            raise RuntimeError("no GPUs detected")
+    def reap_stale_leases(self, ttl_seconds: float) -> List[str]:
+        lease_dir = self.lock_dir / "leases"
+        if not lease_dir.exists():
+            return []
 
-        lease = ResourceLease(gpu_ids=[], lock_dir=self.lock_dir)
-        try:
-            for gpu in gpus:
-                lock_path = self.lock_dir / f"gpu-{gpu.id}.lock"
-                lock = FileLock(lock_path)
-                try:
-                    lock.acquire(timeout=timeout)
-                except Timeout:
-                    continue
-                lease.gpu_ids.append(gpu.id)
-                lease.locks.append(lock)
-                if len(lease.gpu_ids) >= count:
-                    lease.acquired = True
-                    return lease
-        except Exception:
-            lease.release()
-            raise
+        now = time.time()
+        reclaimed: List[str] = []
+        for heartbeat in lease_dir.glob("*.heartbeat"):
+            age = now - heartbeat.stat().st_mtime
+            if age <= ttl_seconds:
+                continue
+            lease_id = heartbeat.stem
+            metadata_path = lease_dir / f"{lease_id}.json"
+            heartbeat.unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
+            reclaimed.append(lease_id)
 
-        lease.release()
-        raise RuntimeError("insufficient free GPUs to satisfy request")
+        return reclaimed

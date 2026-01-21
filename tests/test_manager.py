@@ -4,14 +4,16 @@ from pathlib import Path
 
 import pytest
 
+import inscope_scheduler.backends as backends_module
 import inscope_scheduler.manager as manager_module
 
 
 def test_request_gpus_acquires_and_releases_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_gpus = [manager_module.GPUInfo(id=0, name="fake", total_memory_mb=1024, uuid="gpu0")]
-    monkeypatch.setattr(manager_module, "detect_gpus", lambda: fake_gpus)
+    monkeypatch.setattr(backends_module, "detect_gpus", lambda: fake_gpus)
 
-    manager = manager_module.ResourceManager(lock_dir=tmp_path)
+    backend = backends_module.LocalBackend(lock_dir=tmp_path)
+    manager = manager_module.ResourceManager(backend=backend)
     lease = manager.request_gpus(count=1, timeout=0.0)
     assert lease.acquired
     assert lease.gpu_ids == [0]
