@@ -9,7 +9,7 @@ from typing import List
 from .backends import Backend, LocalBackend, SlurmBackend
 from .lease import ResourceLease
 from .probe import GPUInfo
-
+import time
 
 class ResourceManager:
     def __init__(

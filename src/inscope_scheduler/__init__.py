@@ -3,6 +3,7 @@
 from .jax import configure_jax_for_lease
 from .manager import ResourceManager
 from .probe import GPUInfo, SystemInfo, detect_gpus, detect_system
+from .slurm_submit import SlurmResources, submit_slurm_job
 
 __all__ = [
     "GPUInfo",
@@ -11,6 +12,8 @@ __all__ = [
     "configure_jax_for_lease",
     "detect_gpus",
     "detect_system",
+    "SlurmResources",
+    "submit_slurm_job",
     "__version__",
 ]
 
